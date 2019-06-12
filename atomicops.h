@@ -42,6 +42,17 @@
 // AE_UNUSED
 #define AE_UNUSED(x) ((void)x)
 
+// AE_NO_TSAN
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define AE_NO_TSAN __attribute__((no_sanitize("thread")))
+#else
+#define AE_NO_TSAN
+#endif
+#else
+#define AE_NO_TSAN
+#endif
+
 
 // AE_FORCEINLINE
 #if defined(AE_VCPP) || defined(AE_ICC)
@@ -111,7 +122,7 @@ enum memory_order {
 
 namespace moodycamel {
 
-AE_FORCEINLINE void compiler_fence(memory_order order)
+AE_FORCEINLINE void compiler_fence(memory_order order) AE_NO_TSAN
 {
 	switch (order) {
 		case memory_order_relaxed: break;
@@ -127,7 +138,7 @@ AE_FORCEINLINE void compiler_fence(memory_order order)
 // acquire and release semantics automatically (so only need compiler
 // barriers for those).
 #if defined(AE_ARCH_X86) || defined(AE_ARCH_X64)
-AE_FORCEINLINE void fence(memory_order order)
+AE_FORCEINLINE void fence(memory_order order) AE_NO_TSAN
 {
 	switch (order) {
 		case memory_order_relaxed: break;
@@ -143,7 +154,7 @@ AE_FORCEINLINE void fence(memory_order order)
 	}
 }
 #else
-AE_FORCEINLINE void fence(memory_order order)
+AE_FORCEINLINE void fence(memory_order order) AE_NO_TSAN
 {
 	// Non-specialized arch, use heavier memory barriers everywhere just in case :-(
 	switch (order) {
@@ -180,7 +191,7 @@ AE_FORCEINLINE void fence(memory_order order)
 
 namespace moodycamel {
 
-AE_FORCEINLINE void compiler_fence(memory_order order)
+AE_FORCEINLINE void compiler_fence(memory_order order) AE_NO_TSAN
 {
 	switch (order) {
 		case memory_order_relaxed: break;
@@ -192,7 +203,7 @@ AE_FORCEINLINE void compiler_fence(memory_order order)
 	}
 }
 
-AE_FORCEINLINE void fence(memory_order order)
+AE_FORCEINLINE void fence(memory_order order) AE_NO_TSAN
 {
 	switch (order) {
 		case memory_order_relaxed: break;
@@ -227,32 +238,32 @@ template<typename T>
 class weak_atomic
 {
 public:
-	weak_atomic() { }
+	AE_NO_TSAN weak_atomic() { }
 #ifdef AE_VCPP
 #pragma warning(push)
 #pragma warning(disable: 4100)		// Get rid of (erroneous) 'unreferenced formal parameter' warning
 #endif
-	template<typename U> weak_atomic(U&& x) : value(std::forward<U>(x)) {  }
+	template<typename U> AE_NO_TSAN weak_atomic(U&& x) : value(std::forward<U>(x)) {  }
 #ifdef __cplusplus_cli
 	// Work around bug with universal reference/nullptr combination that only appears when /clr is on
-	weak_atomic(nullptr_t) : value(nullptr) {  }
+	AE_NO_TSAN weak_atomic(nullptr_t) : value(nullptr) {  }
 #endif
-	weak_atomic(weak_atomic const& other) : value(other.value) {  }
-	weak_atomic(weak_atomic&& other) : value(std::move(other.value)) {  }
+	AE_NO_TSAN weak_atomic(weak_atomic const& other) : value(other.load()) {  }
+	AE_NO_TSAN weak_atomic(weak_atomic&& other) : value(std::move(other.load())) {  }
 #ifdef AE_VCPP
 #pragma warning(pop)
 #endif
 
-	AE_FORCEINLINE operator T() const { return load(); }
+	AE_FORCEINLINE operator T() const AE_NO_TSAN { return load(); }
 
 	
 #ifndef AE_USE_STD_ATOMIC_FOR_WEAK_ATOMIC
-	template<typename U> AE_FORCEINLINE weak_atomic const& operator=(U&& x) { value = std::forward<U>(x); return *this; }
-	AE_FORCEINLINE weak_atomic const& operator=(weak_atomic const& other) { value = other.value; return *this; }
+	template<typename U> AE_FORCEINLINE weak_atomic const& operator=(U&& x) AE_NO_TSAN { value = std::forward<U>(x); return *this; }
+	AE_FORCEINLINE weak_atomic const& operator=(weak_atomic const& other) AE_NO_TSAN { value = other.value; return *this; }
 	
-	AE_FORCEINLINE T load() const { return value; }
+	AE_FORCEINLINE T load() const AE_NO_TSAN { return value; }
 	
-	AE_FORCEINLINE T fetch_add_acquire(T increment)
+	AE_FORCEINLINE T fetch_add_acquire(T increment) AE_NO_TSAN
 	{
 #if defined(AE_ARCH_X64) || defined(AE_ARCH_X86)
 		if (sizeof(T) == 4) return _InterlockedExchangeAdd((long volatile*)&value, (long)increment);
@@ -266,7 +277,7 @@ public:
 		return value;
 	}
 	
-	AE_FORCEINLINE T fetch_add_release(T increment)
+	AE_FORCEINLINE T fetch_add_release(T increment) AE_NO_TSAN
 	{
 #if defined(AE_ARCH_X64) || defined(AE_ARCH_X86)
 		if (sizeof(T) == 4) return _InterlockedExchangeAdd((long volatile*)&value, (long)increment);
@@ -281,26 +292,26 @@ public:
 	}
 #else
 	template<typename U>
-	AE_FORCEINLINE weak_atomic const& operator=(U&& x)
+	AE_FORCEINLINE weak_atomic const& operator=(U&& x) AE_NO_TSAN
 	{
 		value.store(std::forward<U>(x), std::memory_order_relaxed);
 		return *this;
 	}
 	
-	AE_FORCEINLINE weak_atomic const& operator=(weak_atomic const& other)
+	AE_FORCEINLINE weak_atomic const& operator=(weak_atomic const& other) AE_NO_TSAN
 	{
 		value.store(other.value.load(std::memory_order_relaxed), std::memory_order_relaxed);
 		return *this;
 	}
 
-	AE_FORCEINLINE T load() const { return value.load(std::memory_order_relaxed); }
+	AE_FORCEINLINE T load() const AE_NO_TSAN { return value.load(std::memory_order_relaxed); }
 	
-	AE_FORCEINLINE T fetch_add_acquire(T increment)
+	AE_FORCEINLINE T fetch_add_acquire(T increment) AE_NO_TSAN
 	{
 		return value.fetch_add(increment, std::memory_order_acquire);
 	}
 	
-	AE_FORCEINLINE T fetch_add_release(T increment)
+	AE_FORCEINLINE T fetch_add_release(T increment) AE_NO_TSAN
 	{
 		return value.fetch_add(increment, std::memory_order_release);
 	}
@@ -377,37 +388,37 @@ namespace moodycamel
 		    Semaphore& operator=(const Semaphore& other);
 
 		public:
-		    Semaphore(int initialCount = 0)
+		    AE_NO_TSAN Semaphore(int initialCount = 0)
 		    {
 		        assert(initialCount >= 0);
 		        const long maxLong = 0x7fffffff;
 		        m_hSema = CreateSemaphoreW(nullptr, initialCount, maxLong, nullptr);
 		    }
 
-		    ~Semaphore()
+		    AE_NO_TSAN ~Semaphore()
 		    {
 		        CloseHandle(m_hSema);
 		    }
 
-		    void wait()
+		    void wait() AE_NO_TSAN
 		    {
 		    	const unsigned long infinite = 0xffffffff;
 		        WaitForSingleObject(m_hSema, infinite);
 		    }
 
-			bool try_wait()
+			bool try_wait() AE_NO_TSAN
 			{
 				const unsigned long RC_WAIT_TIMEOUT = 0x00000102;
 				return WaitForSingleObject(m_hSema, 0) != RC_WAIT_TIMEOUT;
 			}
 
-			bool timed_wait(std::uint64_t usecs)
+			bool timed_wait(std::uint64_t usecs) AE_NO_TSAN
 			{
 				const unsigned long RC_WAIT_TIMEOUT = 0x00000102;
 				return WaitForSingleObject(m_hSema, (unsigned long)(usecs / 1000)) != RC_WAIT_TIMEOUT;
 			}
 
-		    void signal(int count = 1)
+		    void signal(int count = 1) AE_NO_TSAN
 		    {
 		        ReleaseSemaphore(m_hSema, count, nullptr);
 		    }
@@ -426,28 +437,28 @@ namespace moodycamel
 		    Semaphore& operator=(const Semaphore& other);
 
 		public:
-		    Semaphore(int initialCount = 0)
+		    AE_NO_TSAN Semaphore(int initialCount = 0)
 		    {
 		        assert(initialCount >= 0);
 		        semaphore_create(mach_task_self(), &m_sema, SYNC_POLICY_FIFO, initialCount);
 		    }
 
-		    ~Semaphore()
+		    AE_NO_TSAN ~Semaphore()
 		    {
 		        semaphore_destroy(mach_task_self(), m_sema);
 		    }
 
-		    void wait()
+		    void wait() AE_NO_TSAN
 		    {
 		        semaphore_wait(m_sema);
 		    }
 
-			bool try_wait()
+			bool try_wait() AE_NO_TSAN
 			{
 				return timed_wait(0);
 			}
 
-			bool timed_wait(std::int64_t timeout_usecs)
+			bool timed_wait(std::int64_t timeout_usecs) AE_NO_TSAN
 			{
 				mach_timespec_t ts;
 				ts.tv_sec = static_cast<unsigned int>(timeout_usecs / 1000000);
@@ -459,12 +470,12 @@ namespace moodycamel
 				return rc != KERN_OPERATION_TIMED_OUT && rc != KERN_ABORTED;
 			}
 
-		    void signal()
+		    void signal() AE_NO_TSAN
 		    {
 		        semaphore_signal(m_sema);
 		    }
 
-		    void signal(int count)
+		    void signal(int count) AE_NO_TSAN
 		    {
 		        while (count-- > 0)
 		        {
@@ -485,18 +496,18 @@ namespace moodycamel
 		    Semaphore& operator=(const Semaphore& other);
 
 		public:
-		    Semaphore(int initialCount = 0)
+		    AE_NO_TSAN Semaphore(int initialCount = 0)
 		    {
 		        assert(initialCount >= 0);
 		        sem_init(&m_sema, 0, initialCount);
 		    }
 
-		    ~Semaphore()
+		    AE_NO_TSAN ~Semaphore()
 		    {
 		        sem_destroy(&m_sema);
 		    }
 
-		    void wait()
+		    void wait() AE_NO_TSAN
 		    {
 		        // http://stackoverflow.com/questions/2013181/gdb-causes-sem-wait-to-fail-with-eintr-error
 		        int rc;
@@ -507,7 +518,7 @@ namespace moodycamel
 		        while (rc == -1 && errno == EINTR);
 		    }
 
-			bool try_wait()
+			bool try_wait() AE_NO_TSAN
 			{
 				int rc;
 				do {
@@ -516,7 +527,7 @@ namespace moodycamel
 				return !(rc == -1 && errno == EAGAIN);
 			}
 
-			bool timed_wait(std::uint64_t usecs)
+			bool timed_wait(std::uint64_t usecs) AE_NO_TSAN
 			{
 				struct timespec ts;
 				const int usecs_in_1_sec = 1000000;
@@ -538,12 +549,12 @@ namespace moodycamel
 				return !(rc == -1 && errno == ETIMEDOUT);
 			}
 
-		    void signal()
+		    void signal() AE_NO_TSAN
 		    {
 		        sem_post(&m_sema);
 		    }
 
-		    void signal(int count)
+		    void signal(int count) AE_NO_TSAN
 		    {
 		        while (count-- > 0)
 		        {
@@ -567,7 +578,7 @@ namespace moodycamel
 		    weak_atomic<ssize_t> m_count;
 		    Semaphore m_sema;
 
-		    bool waitWithPartialSpinning(std::int64_t timeout_usecs = -1)
+		    bool waitWithPartialSpinning(std::int64_t timeout_usecs = -1) AE_NO_TSAN
 		    {
 		        ssize_t oldCount;
 		        // Is there a better way to set the initial spin count?
@@ -611,12 +622,12 @@ namespace moodycamel
 		    }
 
 		public:
-		    LightweightSemaphore(ssize_t initialCount = 0) : m_count(initialCount)
+		    AE_NO_TSAN LightweightSemaphore(ssize_t initialCount = 0) : m_count(initialCount)
 		    {
 		        assert(initialCount >= 0);
 		    }
 
-		    bool tryWait()
+		    bool tryWait() AE_NO_TSAN
 		    {
 		        if (m_count.load() > 0)
 		        {
@@ -626,18 +637,18 @@ namespace moodycamel
 		        return false;
 		    }
 
-		    void wait()
+		    void wait() AE_NO_TSAN
 		    {
 		        if (!tryWait())
 		            waitWithPartialSpinning();
 		    }
 
-			bool wait(std::int64_t timeout_usecs)
+			bool wait(std::int64_t timeout_usecs) AE_NO_TSAN
 			{
 				return tryWait() || waitWithPartialSpinning(timeout_usecs);
 			}
 
-		    void signal(ssize_t count = 1)
+		    void signal(ssize_t count = 1) AE_NO_TSAN
 		    {
 		    	assert(count >= 0);
 		        ssize_t oldCount = m_count.fetch_add_release(count);
@@ -648,7 +659,7 @@ namespace moodycamel
 		        }
 		    }
 		    
-		    ssize_t availableApprox() const
+		    ssize_t availableApprox() const AE_NO_TSAN
 		    {
 		    	ssize_t count = m_count.load();
 		    	return count > 0 ? count : 0;

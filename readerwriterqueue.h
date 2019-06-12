@@ -12,6 +12,7 @@
 #include <new>
 #include <cstdint>
 #include <cstdlib>		// For malloc/free/abort & size_t
+#include <memory>
 #if __cplusplus > 199711L || _MSC_VER >= 1700 // C++11 or VS2012
 #include <chrono>
 #endif
@@ -85,7 +86,7 @@ public:
 	// allocations. If more than MAX_BLOCK_SIZE elements are requested,
 	// then several blocks of MAX_BLOCK_SIZE each are reserved (including
 	// at least one extra buffer block).
-	explicit ReaderWriterQueue(size_t maxSize = 15)
+	AE_NO_TSAN explicit ReaderWriterQueue(size_t maxSize = 15)
 #ifndef NDEBUG
 		: enqueuing(false)
 		,dequeuing(false)
@@ -146,7 +147,7 @@ public:
 
 	// Note: The queue should not be accessed concurrently while it's
 	// being moved. It's up to the user to synchronize this.
-	ReaderWriterQueue(ReaderWriterQueue&& other)
+	AE_NO_TSAN ReaderWriterQueue(ReaderWriterQueue&& other)
 		: frontBlock(other.frontBlock.load()),
 		tailBlock(other.tailBlock.load()),
 		largestBlockSize(other.largestBlockSize)
@@ -171,7 +172,7 @@ public:
 
 	// Note: The queue should not be accessed concurrently while it's
 	// being moved. It's up to the user to synchronize this.
-	ReaderWriterQueue& operator=(ReaderWriterQueue&& other)
+	ReaderWriterQueue& operator=(ReaderWriterQueue&& other) AE_NO_TSAN
 	{
 		Block* b = frontBlock.load();
 		frontBlock = other.frontBlock.load();
@@ -185,7 +186,7 @@ public:
 
 	// Note: The queue should not be accessed concurrently while it's
 	// being deleted. It's up to the user to synchronize this.
-	~ReaderWriterQueue()
+	AE_NO_TSAN ~ReaderWriterQueue()
 	{
 		// Make sure we get the latest version of all variables from other CPUs:
 		fence(memory_order_sync);
@@ -215,7 +216,7 @@ public:
 	// Enqueues a copy of element if there is room in the queue.
 	// Returns true if the element was enqueued, false otherwise.
 	// Does not allocate memory.
-	AE_FORCEINLINE bool try_enqueue(T const& element)
+	AE_FORCEINLINE bool try_enqueue(T const& element) AE_NO_TSAN
 	{
 		return inner_enqueue<CannotAlloc>(element);
 	}
@@ -223,7 +224,7 @@ public:
 	// Enqueues a moved copy of element if there is room in the queue.
 	// Returns true if the element was enqueued, false otherwise.
 	// Does not allocate memory.
-	AE_FORCEINLINE bool try_enqueue(T&& element)
+	AE_FORCEINLINE bool try_enqueue(T&& element) AE_NO_TSAN
 	{
 		return inner_enqueue<CannotAlloc>(std::forward<T>(element));
 	}
@@ -231,7 +232,7 @@ public:
 #if MOODYCAMEL_HAS_EMPLACE
 	// Like try_enqueue() but with emplace semantics (i.e. construct-in-place).
 	template<typename... Args>
-	AE_FORCEINLINE bool try_emplace(Args&&... args)
+	AE_FORCEINLINE bool try_emplace(Args&&... args) AE_NO_TSAN
 	{
 		return inner_enqueue<CannotAlloc>(std::forward<Args>(args)...);
 	}
@@ -240,7 +241,7 @@ public:
 	// Enqueues a copy of element on the queue.
 	// Allocates an additional block of memory if needed.
 	// Only fails (returns false) if memory allocation fails.
-	AE_FORCEINLINE bool enqueue(T const& element)
+	AE_FORCEINLINE bool enqueue(T const& element) AE_NO_TSAN
 	{
 		return inner_enqueue<CanAlloc>(element);
 	}
@@ -248,7 +249,7 @@ public:
 	// Enqueues a moved copy of element on the queue.
 	// Allocates an additional block of memory if needed.
 	// Only fails (returns false) if memory allocation fails.
-	AE_FORCEINLINE bool enqueue(T&& element)
+	AE_FORCEINLINE bool enqueue(T&& element) AE_NO_TSAN
 	{
 		return inner_enqueue<CanAlloc>(std::forward<T>(element));
 	}
@@ -256,7 +257,7 @@ public:
 #if MOODYCAMEL_HAS_EMPLACE
 	// Like enqueue() but with emplace semantics (i.e. construct-in-place).
 	template<typename... Args>
-	AE_FORCEINLINE bool emplace(Args&&... args)
+	AE_FORCEINLINE bool emplace(Args&&... args) AE_NO_TSAN
 	{
 		return inner_enqueue<CanAlloc>(std::forward<Args>(args)...);
 	}
@@ -266,7 +267,7 @@ public:
 	// returns false instead. If the queue has at least one element,
 	// moves front to result using operator=, then returns true.
 	template<typename U>
-	bool try_dequeue(U& result)
+	bool try_dequeue(U& result) AE_NO_TSAN
 	{
 #ifndef NDEBUG
 		ReentrantGuard guard(this->dequeuing);
@@ -365,7 +366,7 @@ public:
 	// queue appears empty at the time the method is called, nullptr is
 	// returned instead.
 	// Must be called only from the consumer thread.
-	T* peek()
+	T* peek() AE_NO_TSAN
 	{
 #ifndef NDEBUG
 		ReentrantGuard guard(this->dequeuing);
@@ -407,7 +408,7 @@ public:
 	// Removes the front element from the queue, if any, without returning it.
 	// Returns true on success, or false if the queue appeared empty at the time
 	// `pop` was called.
-	bool pop()
+	bool pop() AE_NO_TSAN
 	{
 #ifndef NDEBUG
 		ReentrantGuard guard(this->dequeuing);
@@ -474,7 +475,7 @@ public:
 	
 	// Returns the approximate number of items currently in the queue.
 	// Safe to call from both the producer and consumer threads.
-	inline size_t size_approx() const
+	inline size_t size_approx() const AE_NO_TSAN
 	{
 		size_t result = 0;
 		Block* frontBlock_ = frontBlock.load();
@@ -495,10 +496,10 @@ private:
 
 #if MOODYCAMEL_HAS_EMPLACE
 	template<AllocationMode canAlloc, typename... Args>
-	bool inner_enqueue(Args&&... args)
+	bool inner_enqueue(Args&&... args) AE_NO_TSAN
 #else
 	template<AllocationMode canAlloc, typename U>
-	bool inner_enqueue(U&& element)
+	bool inner_enqueue(U&& element) AE_NO_TSAN
 #endif
 	{
 #ifndef NDEBUG
@@ -630,7 +631,7 @@ private:
 	}
 	
 	template<typename U>
-	static AE_FORCEINLINE char* align_for(char* ptr)
+	static AE_FORCEINLINE char* align_for(char* ptr) AE_NO_TSAN
 	{
 		const std::size_t alignment = std::alignment_of<U>::value;
 		return ptr + (alignment - (reinterpret_cast<std::uintptr_t>(ptr) % alignment)) % alignment;
@@ -639,14 +640,14 @@ private:
 #ifndef NDEBUG
 	struct ReentrantGuard
 	{
-		ReentrantGuard(bool& _inSection)
+		AE_NO_TSAN ReentrantGuard(bool& _inSection)
 			: inSection(_inSection)
 		{
-			assert(!inSection && "ReaderWriterQueue does not support enqueuing or dequeuing elements from other elements' ctors and dtors");
+			assert(!inSection && "Concurrent (or re-entrant) enqueue or dequeue operation detected (only one thread at a time may hold the producer or consumer role)");
 			inSection = true;
 		}
 
-		~ReentrantGuard() { inSection = false; }
+		AE_NO_TSAN ~ReentrantGuard() { inSection = false; }
 
 	private:
 		ReentrantGuard& operator=(ReentrantGuard const&);
@@ -675,7 +676,7 @@ private:
 
 
 		// size must be a power of two (and greater than 0)
-		Block(size_t const& _size, char* _rawThis, char* _data)
+		AE_NO_TSAN Block(size_t const& _size, char* _rawThis, char* _data)
 			: front(0), localTail(0), tail(0), localFront(0), next(nullptr), data(_data), sizeMask(_size - 1), rawThis(_rawThis)
 		{
 		}
@@ -689,7 +690,7 @@ private:
 	};
 	
 	
-	static Block* make_block(size_t capacity)
+	static Block* make_block(size_t capacity) AE_NO_TSAN
 	{
 		// Allocate enough memory for the block itself, as well as all the elements it will contain
 		auto size = sizeof(Block) + std::alignment_of<Block>::value - 1;
@@ -726,18 +727,29 @@ private:
 	typedef ::moodycamel::ReaderWriterQueue<T, MAX_BLOCK_SIZE> ReaderWriterQueue;
 	
 public:
-	explicit BlockingReaderWriterQueue(size_t maxSize = 15)
-		: inner(maxSize)
+	explicit BlockingReaderWriterQueue(size_t maxSize = 15) AE_NO_TSAN
+		: inner(maxSize), sema(new spsc_sema::LightweightSemaphore())
 	{ }
 
-	
+	BlockingReaderWriterQueue(BlockingReaderWriterQueue&& other) AE_NO_TSAN
+		: inner(std::move(other.inner)), sema(std::move(other.sema))
+	{ }
+
+	BlockingReaderWriterQueue& operator=(BlockingReaderWriterQueue&& other) AE_NO_TSAN
+	{
+		std::swap(sema, other.sema);
+		std::swap(inner, other.inner);
+		return *this;
+	}
+
+
 	// Enqueues a copy of element if there is room in the queue.
 	// Returns true if the element was enqueued, false otherwise.
 	// Does not allocate memory.
-	AE_FORCEINLINE bool try_enqueue(T const& element)
+	AE_FORCEINLINE bool try_enqueue(T const& element) AE_NO_TSAN
 	{
 		if (inner.try_enqueue(element)) {
-			sema.signal();
+			sema->signal();
 			return true;
 		}
 		return false;
@@ -746,10 +758,10 @@ public:
 	// Enqueues a moved copy of element if there is room in the queue.
 	// Returns true if the element was enqueued, false otherwise.
 	// Does not allocate memory.
-	AE_FORCEINLINE bool try_enqueue(T&& element)
+	AE_FORCEINLINE bool try_enqueue(T&& element) AE_NO_TSAN
 	{
 		if (inner.try_enqueue(std::forward<T>(element))) {
-			sema.signal();
+			sema->signal();
 			return true;
 		}
 		return false;
@@ -759,10 +771,10 @@ public:
 	// Enqueues a copy of element on the queue.
 	// Allocates an additional block of memory if needed.
 	// Only fails (returns false) if memory allocation fails.
-	AE_FORCEINLINE bool enqueue(T const& element)
+	AE_FORCEINLINE bool enqueue(T const& element) AE_NO_TSAN
 	{
 		if (inner.enqueue(element)) {
-			sema.signal();
+			sema->signal();
 			return true;
 		}
 		return false;
@@ -771,10 +783,10 @@ public:
 	// Enqueues a moved copy of element on the queue.
 	// Allocates an additional block of memory if needed.
 	// Only fails (returns false) if memory allocation fails.
-	AE_FORCEINLINE bool enqueue(T&& element)
+	AE_FORCEINLINE bool enqueue(T&& element) AE_NO_TSAN
 	{
 		if (inner.enqueue(std::forward<T>(element))) {
-			sema.signal();
+			sema->signal();
 			return true;
 		}
 		return false;
@@ -785,9 +797,9 @@ public:
 	// returns false instead. If the queue has at least one element,
 	// moves front to result using operator=, then returns true.
 	template<typename U>
-	bool try_dequeue(U& result)
+	bool try_dequeue(U& result) AE_NO_TSAN
 	{
-		if (sema.tryWait()) {
+		if (sema->tryWait()) {
 			bool success = inner.try_dequeue(result);
 			assert(success);
 			AE_UNUSED(success);
@@ -800,9 +812,9 @@ public:
 	// Attempts to dequeue an element; if the queue is empty,
 	// waits until an element is available, then dequeues it.
 	template<typename U>
-	void wait_dequeue(U& result)
+	void wait_dequeue(U& result) AE_NO_TSAN
 	{
-		sema.wait();
+		sema->wait();
 		bool success = inner.try_dequeue(result);
 		AE_UNUSED(result);
 		assert(success);
@@ -817,9 +829,9 @@ public:
 	// Using a negative timeout indicates an indefinite timeout,
 	// and is thus functionally equivalent to calling wait_dequeue.
 	template<typename U>
-	bool wait_dequeue_timed(U& result, std::int64_t timeout_usecs)
+	bool wait_dequeue_timed(U& result, std::int64_t timeout_usecs) AE_NO_TSAN
 	{
-		if (!sema.wait(timeout_usecs)) {
+		if (!sema->wait(timeout_usecs)) {
 			return false;
 		}
 		bool success = inner.try_dequeue(result);
@@ -838,7 +850,7 @@ public:
 	// Using a negative timeout indicates an indefinite timeout,
 	// and is thus functionally equivalent to calling wait_dequeue.
 	template<typename U, typename Rep, typename Period>
-	inline bool wait_dequeue_timed(U& result, std::chrono::duration<Rep, Period> const& timeout)
+	inline bool wait_dequeue_timed(U& result, std::chrono::duration<Rep, Period> const& timeout) AE_NO_TSAN
 	{
         return wait_dequeue_timed(result, std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
 	}
@@ -850,7 +862,7 @@ public:
 	// queue appears empty at the time the method is called, nullptr is
 	// returned instead.
 	// Must be called only from the consumer thread.
-	AE_FORCEINLINE T* peek()
+	AE_FORCEINLINE T* peek() AE_NO_TSAN
 	{
 		return inner.peek();
 	}
@@ -858,9 +870,9 @@ public:
 	// Removes the front element from the queue, if any, without returning it.
 	// Returns true on success, or false if the queue appeared empty at the time
 	// `pop` was called.
-	AE_FORCEINLINE bool pop()
+	AE_FORCEINLINE bool pop() AE_NO_TSAN
 	{
-		if (sema.tryWait()) {
+		if (sema->tryWait()) {
 			bool result = inner.pop();
 			assert(result);
 			AE_UNUSED(result);
@@ -871,20 +883,20 @@ public:
 	
 	// Returns the approximate number of items currently in the queue.
 	// Safe to call from both the producer and consumer threads.
-	AE_FORCEINLINE size_t size_approx() const
+	AE_FORCEINLINE size_t size_approx() const AE_NO_TSAN
 	{
-		return sema.availableApprox();
+		return sema->availableApprox();
 	}
 
 
 private:
 	// Disable copying & assignment
-	BlockingReaderWriterQueue(ReaderWriterQueue const&) {  }
-	BlockingReaderWriterQueue& operator=(ReaderWriterQueue const&) {  }
+	BlockingReaderWriterQueue(BlockingReaderWriterQueue const&) {  }
+	BlockingReaderWriterQueue& operator=(BlockingReaderWriterQueue const&) {  }
 	
 private:
 	ReaderWriterQueue inner;
-	spsc_sema::LightweightSemaphore sema;
+	std::unique_ptr<spsc_sema::LightweightSemaphore> sema;
 };
 
 }    // end namespace moodycamel
